@@ -121,6 +121,14 @@ found:
     return 0;
   }
 
+  p->kpagetable = kvmprocinit();
+  if(mappages(p->kpagetable, TRAPFRAME, PGSIZE,
+              (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+    panic("allocproc: map trapframe failed\n");   
+  }
+  uint64 kstack_pa = kvmpa(p->kstack);
+  mappages(p->kpagetable, p->kstack, PGSIZE, kstack_pa, PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -142,6 +150,9 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if(p->kpagetable)
+    kfreewalk(p->kpagetable);
+  p->kpagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -220,6 +231,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  pagetablecopy(p->pagetable, p->kpagetable, 0, PGSIZE);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -243,11 +255,18 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if(sz + n >= PLIC){
+        return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    pagetablecopy(p->pagetable, p->kpagetable, sz - n, sz);
   } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uint32 newsz;
+    newsz = uvmdealloc(p->pagetable, sz, sz + n);
+    kvmdealloc(p->kpagetable, sz, sz + n);
+    sz = newsz;
   }
   p->sz = sz;
   return 0;
@@ -268,7 +287,8 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0 || 
+    pagetablecopy(np->pagetable, np->kpagetable, 0, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -473,11 +493,13 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        kvmprocinithart(p->kpagetable);
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        kvminithart();
 
         found = 1;
       }
