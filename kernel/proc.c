@@ -118,11 +118,7 @@ found:
     return 0;
   }
 
-  // Allocate a backup trapframe page.
-  if((p->backupframe = (struct trapframe *)kalloc()) == 0){
-    release(&p->lock);
-    return 0;
-  }
+  p->backupframe = 0;
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);

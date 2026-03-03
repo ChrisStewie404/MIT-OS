@@ -81,6 +81,8 @@ usertrap(void)
     if(p->ticks > 0){
       p->elapsed = (p->elapsed + 1) % p->ticks;
       if(!p->elapsed && !p->handling){
+        if(!p->backupframe)
+          p->backupframe  = (struct trapframe *)kalloc();
         *p->backupframe = *p->trapframe;
         p->trapframe->epc = (uint64)p->alarm_handler;
         p->handling = 1;
