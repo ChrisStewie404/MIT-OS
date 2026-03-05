@@ -50,7 +50,9 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  uint64 scause = r_scause();
+
+  if(scause == 8){
     // system call
 
     if(p->killed)
@@ -65,6 +67,26 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(scause == 13 || scause == 15){
+    // load/store page fault
+    uint64 va = r_stval();
+    uint64 stackbase = PGROUNDDOWN(p->trapframe->sp);
+
+    if(va >= p->sz){
+      p->killed = 1;
+    } else if(va >= (stackbase - PGSIZE) && va < stackbase){
+      // invalid page below the user stack
+      p->killed = 1;
+    } else {
+      va = PGROUNDDOWN(va);
+      char *mem;
+      if((mem = kalloc()) == 0){
+        p->killed = 1;
+      } else if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+        kfree(mem);
+        panic("lazy allocation failed");
+      }      
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
